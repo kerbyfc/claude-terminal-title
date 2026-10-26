@@ -3,8 +3,8 @@
 // behaviour is testable without an engine.
 
 export const DEFAULT_MARKER = '◉'
-export const DEFAULT_SPINNER = ['◜', '◠', '◝', '◞', '◡', '◟']
-export const DEFAULT_SPINNER_INTERVAL = 300
+export const DEFAULT_SPINNER = ['◜', '◝', '◞', '◟']
+export const DEFAULT_SPINNER_INTERVAL = 150
 export const NEEDS_INPUT = 'needs input:'
 
 // A terminal title is a single line; this keeps a pasted prompt from putting

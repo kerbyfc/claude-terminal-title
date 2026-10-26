@@ -1,6 +1,6 @@
 {
   "name": "terminal-title",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code plugin: names the terminal title after the session and marks working, waiting, and permission states",
   "author": {
     "name": "kerbyfc"
@@ -37,10 +37,8 @@
       "required": false,
       "default": [
         "◜",
-        "◠",
         "◝",
         "◞",
-        "◡",
         "◟"
       ]
     },
@@ -49,7 +47,7 @@
       "title": "Spinner interval (ms)",
       "description": "Milliseconds between spinner frames.",
       "required": false,
-      "default": 300
+      "default": 150
     }
   }
 }

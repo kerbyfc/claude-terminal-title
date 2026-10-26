@@ -160,10 +160,10 @@ test('options are validated instead of silently corrected', () => {
   expect(markerRule(undefined)).toBe('◉ ')
   expect(markerRule('▲')).toBe('▲ ')
   expect(markerRule('')).toBe('')
-  expect(spinnerRule(undefined)).toEqual(['◜ ', '◠ ', '◝ ', '◞ ', '◡ ', '◟ '])
+  expect(spinnerRule(undefined)).toEqual(['◜ ', '◝ ', '◞ ', '◟ '])
   expect(spinnerRule(false)).toEqual([])
   expect(spinnerRule(['a', 'b'])).toEqual(['a ', 'b '])
-  expect(intervalRule(undefined)).toBe(300)
+  expect(intervalRule(undefined)).toBe(150)
   expect(intervalRule(5)).toBe(5)
 
   expect(() => markerRule(42)).toThrow('"marker" must be a string')
@@ -210,8 +210,8 @@ test('idle, working, needs input, and the spinner', async ($, on) => {
   await clock.settle()
   expect(h.last()).toBe('◜ Fix auth')
 
-  await clock.advance(300)
-  expect(h.last()).toBe('◠ Fix auth')
+  await clock.advance(150)
+  expect(h.last()).toBe('◝ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',

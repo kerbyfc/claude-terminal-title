@@ -49,7 +49,7 @@
       "title": "Spinner interval (ms)",
       "description": "Milliseconds between spinner frames.",
       "required": false,
-      "default": 100
+      "default": 300
     }
   }
 }

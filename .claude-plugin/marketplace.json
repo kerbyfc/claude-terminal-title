@@ -1,0 +1,13 @@
+{
+  "name": "claude-terminal-title",
+  "description": "A Claude Code plugin that writes the session's name into the terminal title, with a working spinner and a waiting marker.",
+  "owner": {
+    "name": "kerbyfc"
+  },
+  "plugins": [
+    {
+      "name": "terminal-title",
+      "source": "./"
+    }
+  ]
+}

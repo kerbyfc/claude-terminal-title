@@ -1,0 +1,52 @@
+{
+  "name": "terminal-title",
+  "version": "0.1.0",
+  "description": "Claude Code plugin: names the terminal title after the session and marks working, waiting, and permission states",
+  "author": {
+    "name": "kerbyfc"
+  },
+  "homepage": "https://github.com/kerbyfc/claude-terminal-title",
+  "repository": "https://github.com/kerbyfc/claude-terminal-title",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "terminal",
+    "title"
+  ],
+  "userConfig": {
+    "marker": {
+      "type": "string",
+      "title": "Waiting marker",
+      "description": "The symbol prepended when the session is waiting for you. One space is added after it; set it to an empty string to disable the marker.",
+      "required": false,
+      "default": "◉"
+    },
+    "spinner": {
+      "type": "string",
+      "multiple": true,
+      "title": "Spinner frames",
+      "description": "Frames of the working animation, one entry per frame. One space is added after each frame. An empty list turns the animation off.",
+      "required": false,
+      "default": [
+        "⠋",
+        "⠙",
+        "⠹",
+        "⠸",
+        "⠼",
+        "⠴",
+        "⠦",
+        "⠧",
+        "⠇",
+        "⠏"
+      ]
+    },
+    "spinnerInterval": {
+      "type": "number",
+      "title": "Spinner interval (ms)",
+      "description": "Milliseconds between spinner frames.",
+      "required": false,
+      "default": 100
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "claude-terminal-title",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Development scripts for the terminal-title Claude Code plugin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kerbyfc/claude-terminal-title.git"
+  },
+  "scripts": {
+    "test": "claude plugin test .",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

@@ -2,8 +2,8 @@
 // read them from the plugin's options. Kept apart from the hooks module so the
 // behaviour is testable without an engine.
 
-export const DEFAULT_MARKER = '◉'
-export const DEFAULT_SPINNER = ['◜', '◝', '◞', '◟']
+export const DEFAULT_MARKER = '◍'
+export const DEFAULT_SPINNER = ['◐', '◓', '◑', '◒']
 export const DEFAULT_SPINNER_INTERVAL = 150
 export const NEEDS_INPUT = 'needs input:'
 

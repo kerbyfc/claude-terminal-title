@@ -157,10 +157,10 @@ test('waitsForInput looks at the last non-empty line', () => {
 })
 
 test('options are validated instead of silently corrected', () => {
-  expect(markerRule(undefined)).toBe('◉ ')
+  expect(markerRule(undefined)).toBe('◍ ')
   expect(markerRule('▲')).toBe('▲ ')
   expect(markerRule('')).toBe('')
-  expect(spinnerRule(undefined)).toEqual(['◜ ', '◝ ', '◞ ', '◟ '])
+  expect(spinnerRule(undefined)).toEqual(['◐ ', '◓ ', '◑ ', '◒ '])
   expect(spinnerRule(false)).toEqual([])
   expect(spinnerRule(['a', 'b'])).toEqual(['a ', 'b '])
   expect(intervalRule(undefined)).toBe(150)
@@ -208,10 +208,10 @@ test('idle, working, needs input, and the spinner', async ($, on) => {
 
   await $.turn.start({ text: 'Fix auth', turnId: 't1' })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await clock.advance(150)
-  expect(h.last()).toBe('◝ Fix auth')
+  expect(h.last()).toBe('◓ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',
@@ -232,7 +232,7 @@ test('idle, working, needs input, and the spinner', async ($, on) => {
     reason: 'answer',
   })
   await clock.settle()
-  expect(h.last()).toBe('◉ Fix auth')
+  expect(h.last()).toBe('◍ Fix auth')
 
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
@@ -318,7 +318,7 @@ test(
 
     await $.turn.start({ text: 'First', turnId: 't1' })
     await clock.settle()
-    expect(h.last()).toBe('◜ Fix auth')
+    expect(h.last()).toBe('◐ Fix auth')
 
     await $.turn.complete({
       answer: 'Done.',
@@ -333,7 +333,7 @@ test(
     })
     await $.turn.start({ text: 'Second', turnId: 't2' })
     await clock.settle()
-    expect(h.last()).toBe('◜ Fix auth')
+    expect(h.last()).toBe('◐ Fix auth')
 
     await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
   },
@@ -354,7 +354,7 @@ test(
 
     await $.turn.start({ text: 'First', turnId: 't1' })
     await clock.settle()
-    expect(h.last()).toBe('◜ [ ] Fix auth')
+    expect(h.last()).toBe('◐ [ ] Fix auth')
 
     await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
   },
@@ -368,7 +368,7 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
 
   await $.turn.start({ text: 'Run the permissioned tool', turnId: 'main' })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   let release!: () => void
   h.setGate(new Promise<void>(resolve => {
@@ -376,22 +376,22 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
   }))
   const call = $.tool.call({ tool: 'Bash', command: 'ls' })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   await clock.settle()
-  expect(h.atPermission).toBe('◉ Fix auth')
-  expect(h.last()).toBe('◉ Fix auth')
+  expect(h.atPermission).toBe('◍ Fix auth')
+  expect(h.last()).toBe('◍ Fix auth')
 
   // The waiting marker must not be overwritten by a spinner frame while the
   // dialog is open; the timer is stopped when the mode turns waiting.
   await clock.advance(300)
-  expect(h.last()).toBe('◉ Fix auth')
+  expect(h.last()).toBe('◍ Fix auth')
 
   release()
   await call
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',
@@ -414,7 +414,7 @@ test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => 
 
   await $.turn.start({ text: 'Ask a question', turnId: 'main' })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   let release!: () => void
   h.setGate(new Promise<void>(resolve => {
@@ -435,16 +435,16 @@ test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => 
     ],
   })
   await clock.settle()
-  expect(h.atToolCall).toBe('◉ Fix auth')
-  expect(h.last()).toBe('◉ Fix auth')
+  expect(h.atToolCall).toBe('◍ Fix auth')
+  expect(h.last()).toBe('◍ Fix auth')
 
   await clock.advance(300)
-  expect(h.last()).toBe('◉ Fix auth')
+  expect(h.last()).toBe('◍ Fix auth')
 
   release()
   await call
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',
@@ -477,7 +477,7 @@ test('a background subagent keeps the title busy after the main turn', async ($,
     fork: false,
   })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await $.turn.complete({
     answer: 'Spawned.',
@@ -487,7 +487,7 @@ test('a background subagent keeps the title busy after the main turn', async ($,
     reason: 'answer',
   })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await $.classic.SubagentStop({
     agent_id: 'agent-1',
@@ -511,7 +511,7 @@ test('a background shell keeps the title busy until its notification', async ($,
   h.setResult({ backgroundTaskId: 'task-1' })
   await $.tool.call({ tool: 'Bash', command: 'sleep 1', run_in_background: true })
   await clock.settle()
-  expect(h.last()).toBe('◜ Fix auth')
+  expect(h.last()).toBe('◐ Fix auth')
 
   await $.session.append({
     door: 'prompt',
@@ -625,7 +625,7 @@ test('a resumed reply ending in needs input shows the marker', async ($, on) => 
     { role: 'assistant', text: 'Done.\nneeds input: [question](obsidian://x)', toolUses: [] },
   ])
   await start($, h, clock)
-  expect(h.last()).toBe('◉ Fix auth')
+  expect(h.last()).toBe('◍ Fix auth')
 
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })

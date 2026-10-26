@@ -1,6 +1,6 @@
 {
   "name": "terminal-title",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Claude Code plugin: names the terminal title after the session and marks working, waiting, and permission states",
   "author": {
     "name": "kerbyfc"
@@ -27,7 +27,7 @@
       "title": "Waiting marker",
       "description": "The symbol prepended when the session is waiting for you. One space is added after it; set it to an empty string to disable the marker.",
       "required": false,
-      "default": "◉"
+      "default": "◍"
     },
     "spinner": {
       "type": "string",
@@ -36,10 +36,10 @@
       "description": "Frames of the working animation, one entry per frame. One space is added after each frame. An empty list turns the animation off.",
       "required": false,
       "default": [
-        "◜",
-        "◝",
-        "◞",
-        "◟"
+        "◐",
+        "◓",
+        "◑",
+        "◒"
       ]
     },
     "spinnerInterval": {

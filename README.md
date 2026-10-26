@@ -4,7 +4,7 @@ A Claude Code plugin that writes the terminal title itself: the session's name w
 
 | State | Terminal title |
 | --- | --- |
-| The main turn is running, any subagent is running (foreground or `run_in_background`), or a `run_in_background` shell is running | `⠋ Fix auth` (animated) |
+| The main turn is running, any subagent is running (foreground or `run_in_background`), or a `run_in_background` shell is running | `◜ Fix auth` (animated) |
 | The last non-empty line of the assistant's reply starts with `needs input:` | `◉ Fix auth` |
 | A permission request or an `AskUserQuestion` dialog is pending, including in subagents | `◉ Fix auth` |
 | Idle | `Fix auth` |
@@ -47,8 +47,9 @@ The options are read from `pluginConfigs` in `~/.claude/settings.json`, keyed by
   "pluginConfigs": {
     "terminal-title": {
       "options": {
+        "strip": "",
         "marker": "◉",
-        "spinner": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+        "spinner": ["◜", "◠", "◝", "◞", "◡", "◟"],
         "spinnerInterval": 100
       }
     }
@@ -56,13 +57,27 @@ The options are read from `pluginConfigs` in `~/.claude/settings.json`, keyed by
 }
 ```
 
+- `strip` — a JavaScript regular expression source. Its first match is removed from the session name **in the terminal title only**; the session's own name is not changed. Default: empty, so nothing is stripped. Use it to cut what another session-naming automation adds — status tags such as `[ ]`/`[x]`, task prefixes, ticket numbers — so the title keeps only the name. Example: `"strip": "^\\[[ xX]\\] "` turns `[ ] Fix auth` and `[x] Fix auth` into `Fix auth`. An invalid expression is logged once in the transcript and nothing is stripped; the plugin keeps running.
 - `marker` — the symbol prepended when the session is waiting. One space is added after it; set it to `""` to disable the marker. Default: `◉`.
-- `spinner` — frames of the working animation. One space is added after each frame; set it to `[]` to disable the animation. Default: `["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]`. Claude Code's config menu edits single-valued options only, so set this list in `pluginConfigs` as shown. The OpenCode plugin's `spinner: false` has the same effect as `[]`.
+- `spinner` — frames of the working animation. One space is added after each frame; set it to `[]` to disable the animation. Default: `["◜", "◠", "◝", "◞", "◡", "◟"]`. Claude Code's config menu edits single-valued options only, so set this list in `pluginConfigs` as shown. The OpenCode plugin's `spinner: false` has the same effect as `[]`.
 - `spinnerInterval` — milliseconds between spinner frames. Default: `100`.
 
-There is no `strip` option. The OpenCode plugin strips a prefix from a title the host produced; here the plugin builds the title from the session's own name, so there is no host prefix to remove.
+Names are reduced to one printable line, stripped of control characters (including `ESC` and `BEL`, which would otherwise end the terminal's title sequence), and cut to 100 characters; `strip` is applied after that, while the title is composed.
 
-Names are reduced to one printable line, stripped of control characters (including `ESC` and `BEL`, which would otherwise end the terminal's title sequence), and cut to 100 characters.
+### Compared with the OpenCode plugin
+
+In the OpenCode plugin these are `plugins[].options` in `cli.json`; here they are `pluginConfigs`, with the single-valued fields also in `/config`.
+
+| Option | OpenCode plugin | This plugin | Set through | Difference |
+| --- | --- | --- | --- | --- |
+| `strip` | JavaScript regular expression string; its first match is removed from the host title; default `^OC \| ` | JavaScript regular expression string; its first match is removed from the session name in the title only; default empty | `pluginConfigs`, `/config` | Claude Code has no `OC \| ` prefix, so the default is empty; the option remains for other naming automation. An invalid expression fails the OpenCode plugin's load; this plugin logs it and leaves the name unstripped, as requested here. |
+| `marker` | string; one space is added; default `◉` | the same | `pluginConfigs`, `/config` | none |
+| `spinner` | list of strings, or `false`; default the OpenCode Braille set | `type: "string", multiple: true`; default the six arc frames above; `[]` disables | `pluginConfigs` only; Claude Code's config menu skips list fields | Claude Code's `userConfig` has no array-valued type (a list is `type: "string"` with `multiple: true`) and no boolean form for this field, so `spinner: false` cannot be stored; `[]` is the equivalent. The rule function accepts `false`; the manifest path cannot. |
+| `spinnerInterval` | number of milliseconds; default `100` | the same | `pluginConfigs`, `/config` | none |
+
+### Why the default spinner is not the OpenCode one
+
+The default frames are `◜ ◠ ◝ ◞ ◡ ◟`, not the Braille set `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`. The author uses the Braille set in [opencode-terminal-title](https://github.com/kerbyfc/opencode-terminal-title), so a different default lets you tell a Claude Code tab from an OpenCode tab at a glance.
 
 ## Where the name comes from
 

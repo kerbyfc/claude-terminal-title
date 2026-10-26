@@ -3,18 +3,7 @@
 // behaviour is testable without an engine.
 
 export const DEFAULT_MARKER = '◉'
-export const DEFAULT_SPINNER = [
-  '⠋',
-  '⠙',
-  '⠹',
-  '⠸',
-  '⠼',
-  '⠴',
-  '⠦',
-  '⠧',
-  '⠇',
-  '⠏',
-]
+export const DEFAULT_SPINNER = ['◜', '◠', '◝', '◞', '◡', '◟']
 export const DEFAULT_SPINNER_INTERVAL = 100
 export const NEEDS_INPUT = 'needs input:'
 
@@ -56,6 +45,23 @@ export function cleanName(value: string): string {
 export function markText(value: string): string {
   const text = withoutControls(value).trimEnd()
   return text === '' ? '' : `${text} `
+}
+
+export type StripRule = {
+  regex?: RegExp
+  error?: string
+}
+
+export function stripRule(value: unknown): StripRule {
+  if (value === undefined || value === '') return {}
+  if (typeof value !== 'string') {
+    return { error: '"strip" must be a regular expression string' }
+  }
+  try {
+    return { regex: new RegExp(value) }
+  } catch (error) {
+    return { error: `invalid "strip" regular expression: ${String(error)}` }
+  }
 }
 
 export function markerRule(value: unknown): string {

@@ -6,6 +6,7 @@ import {
   intervalRule,
   markerRule,
   spinnerRule,
+  stripRule,
   waitsForInput,
   type Mode,
 } from './title'
@@ -92,9 +93,15 @@ function backgroundTaskOf(result: unknown): string | undefined {
 
 function createController(
   $: EngineInterface,
-  rules: { marker: string; frames: readonly string[]; interval: number },
+  rules: {
+    marker: string
+    frames: readonly string[]
+    interval: number
+    strip?: RegExp
+    stripError?: string
+  },
 ): Controller {
-  const { marker, frames, interval } = rules
+  const { marker, frames, interval, strip, stripError } = rules
 
   let generation = 0
   let hasSurface = false
@@ -134,6 +141,8 @@ function createController(
       // A log line is the error channel; losing it must not break a hook.
     }
   }
+
+  if (stripError !== undefined) report(stripError)
 
   const writeTitle = (title: string, silent = false): void => {
     if (!hasSurface) return
@@ -215,7 +224,9 @@ function createController(
   const paint = (): void => {
     const mode = currentMode()
     syncSpinner(mode)
-    const title = composeTitle(mode, name, marker, frames, frame)
+    const titleName =
+      strip === undefined ? name : name.replace(strip, '').trimStart()
+    const title = composeTitle(mode, titleName, marker, frames, frame)
     if (title === painted) return
     painted = title
     writeTitle(title)
@@ -589,7 +600,13 @@ function createController(
 }
 
 type ControllerHolder = {
-  rules: { marker: string; frames: readonly string[]; interval: number }
+  rules: {
+    marker: string
+    frames: readonly string[]
+    interval: number
+    strip?: RegExp
+    stripError?: string
+  }
   controller?: Controller
 }
 
@@ -602,7 +619,16 @@ export const register: Register = (on, options) => {
   const marker = markerRule(options.marker)
   const frames = spinnerRule(options.spinner)
   const interval = intervalRule(options.spinnerInterval)
-  const holder: ControllerHolder = { rules: { marker, frames, interval } }
+  const strip = stripRule(options.strip)
+  const holder: ControllerHolder = {
+    rules: {
+      marker,
+      frames,
+      interval,
+      strip: strip.regex,
+      stripError: strip.error,
+    },
+  }
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)

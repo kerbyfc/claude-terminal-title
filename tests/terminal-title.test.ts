@@ -5,6 +5,7 @@ import {
   intervalRule,
   markerRule,
   spinnerRule,
+  stripRule,
   waitsForInput,
 } from '../hooks/title'
 import {
@@ -159,6 +160,7 @@ test('options are validated instead of silently corrected', () => {
   expect(markerRule(undefined)).toBe('◉ ')
   expect(markerRule('▲')).toBe('▲ ')
   expect(markerRule('')).toBe('')
+  expect(spinnerRule(undefined)).toEqual(['◜ ', '◠ ', '◝ ', '◞ ', '◡ ', '◟ '])
   expect(spinnerRule(false)).toEqual([])
   expect(spinnerRule(['a', 'b'])).toEqual(['a ', 'b '])
   expect(intervalRule(5)).toBe(5)
@@ -168,6 +170,14 @@ test('options are validated instead of silently corrected', () => {
   expect(() => spinnerRule('a')).toThrow('array of strings')
   expect(() => intervalRule(0)).toThrow('positive number')
   expect(() => intervalRule(Number.NaN)).toThrow('positive number')
+})
+
+test('strip is a JavaScript regular expression source', () => {
+  expect(stripRule(undefined).regex).toBeUndefined()
+  expect(stripRule('').regex).toBeUndefined()
+  expect(stripRule('^\\[[ xX]\\] ').regex?.test('[ ] Fix auth')).toBe(true)
+  expect(stripRule('(').error).toContain('invalid "strip" regular expression')
+  expect(stripRule(42).error).toContain('must be a regular expression string')
 })
 
 test('the transcript title rows are read with custom title first', () => {
@@ -197,10 +207,10 @@ test('idle, working, needs input, and the spinner', async ($, on) => {
 
   await $.turn.start({ text: 'Fix auth', turnId: 't1' })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await clock.advance(100)
-  expect(h.last()).toBe('⠙ Fix auth')
+  expect(h.last()).toBe('◠ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',
@@ -296,6 +306,59 @@ test('the first prompt stands in until a session title exists', async ($, on) =>
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
 
+test(
+  'strip removes the first match from the title name only',
+  { options: { strip: '^\\[[ xX]\\] ' } },
+  async ($, on) => {
+    const clock = mock.clock(on)
+    const h = harness(on)
+    h.setCustom('{"customTitle":"[ ] Fix auth"}')
+    await start($, h, clock)
+
+    await $.turn.start({ text: 'First', turnId: 't1' })
+    await clock.settle()
+    expect(h.last()).toBe('◜ Fix auth')
+
+    await $.turn.complete({
+      answer: 'Done.',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'answer',
+    })
+    await $.classic.UserPromptSubmit({
+      prompt: 'next',
+      session_title: '[x] Fix auth',
+    })
+    await $.turn.start({ text: 'Second', turnId: 't2' })
+    await clock.settle()
+    expect(h.last()).toBe('◜ Fix auth')
+
+    await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+  },
+)
+
+test(
+  'an invalid strip regular expression is logged and strips nothing',
+  { options: { strip: '(' } },
+  async ($, on) => {
+    const clock = mock.clock(on)
+    const h = harness(on)
+    h.setCustom('{"customTitle":"[ ] Fix auth"}')
+    await start($, h, clock)
+
+    expect(h.logs.some(line => line.includes('invalid "strip" regular expression'))).toBe(
+      true,
+    )
+
+    await $.turn.start({ text: 'First', turnId: 't1' })
+    await clock.settle()
+    expect(h.last()).toBe('◜ [ ] Fix auth')
+
+    await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+  },
+)
+
 test('a permission request marks the tool call as waiting', async ($, on) => {
   const clock = mock.clock(on)
   const h = harness(on)
@@ -304,7 +367,7 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
 
   await $.turn.start({ text: 'Run the permissioned tool', turnId: 'main' })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   let release!: () => void
   h.setGate(new Promise<void>(resolve => {
@@ -312,7 +375,7 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
   }))
   const call = $.tool.call({ tool: 'Bash', command: 'ls' })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   await clock.settle()
@@ -327,7 +390,7 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
   release()
   await call
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',
@@ -350,7 +413,7 @@ test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => 
 
   await $.turn.start({ text: 'Ask a question', turnId: 'main' })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   let release!: () => void
   h.setGate(new Promise<void>(resolve => {
@@ -380,7 +443,7 @@ test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => 
   release()
   await call
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await $.turn.complete({
     answer: 'Done.',
@@ -413,7 +476,7 @@ test('a background subagent keeps the title busy after the main turn', async ($,
     fork: false,
   })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await $.turn.complete({
     answer: 'Spawned.',
@@ -423,7 +486,7 @@ test('a background subagent keeps the title busy after the main turn', async ($,
     reason: 'answer',
   })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await $.classic.SubagentStop({
     agent_id: 'agent-1',
@@ -447,7 +510,7 @@ test('a background shell keeps the title busy until its notification', async ($,
   h.setResult({ backgroundTaskId: 'task-1' })
   await $.tool.call({ tool: 'Bash', command: 'sleep 1', run_in_background: true })
   await clock.settle()
-  expect(h.last()).toBe('⠋ Fix auth')
+  expect(h.last()).toBe('◜ Fix auth')
 
   await $.session.append({
     door: 'prompt',

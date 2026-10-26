@@ -43,8 +43,8 @@ type Controller = {
   }) => void
   turnStart: (e: { text: string; turnId: string; agentId?: string }) => void
   turnComplete: (e: { answer: string; turnId: string; agentId?: string }) => void
-  permissionAsked: (toolName: string) => void
-  callStarted: (tool: string, id: string) => void
+  permissionAsked: (toolName: string) => Promise<void>
+  callStarted: (tool: string, id: string) => Promise<void>
   callFinished: (id: string, result: unknown) => void
   agentStarted: (agentId: string | undefined) => void
   agentStopped: (agentId: string | undefined) => void
@@ -113,6 +113,7 @@ function createController(
   let writing = false
   let pending: string | undefined
   let writeFailed = false
+  const waiters: Array<() => void> = []
   let largeTranscriptReported = false
   let titleReadFailureReported = false
   let statFailureReported = false
@@ -154,8 +155,35 @@ function createController(
         }
       } finally {
         writing = false
+        for (const resolve of waiters.splice(0)) resolve()
       }
     })()
+  }
+
+  // A dialog is drawn in front of the tty, and a title write started after it
+  // opens is held until it closes. The permission and question hooks wait for
+  // the marker to reach the tty before they let the dialog open.
+  const flushTitle = (): Promise<void> => {
+    if (!writing) return Promise.resolve()
+    return new Promise(resolve => waiters.push(resolve))
+  }
+
+  // The dialog is the important thing. A terminal write that never returns
+  // must not keep it off the screen; the marker loses, and the transcript says
+  // why.
+  const waitForTitle = async (before: string): Promise<void> => {
+    if (!writing) return
+    let timer: Timer | undefined
+    const outcome = await Promise.race([
+      flushTitle().then(() => 'written' as const),
+      new Promise<'timeout'>(resolve => {
+        timer = $.clock.after(250, () => resolve('timeout'))
+      }),
+    ])
+    timer?.cancel()
+    if (outcome === 'timeout') {
+      report(`the title write did not finish within 250ms before the ${before}; opening it without the marker`)
+    }
   }
 
   const currentMode = (): Mode => {
@@ -487,7 +515,7 @@ function createController(
       paint()
     },
 
-    permissionAsked: toolName => {
+    permissionAsked: async toolName => {
       let match: string | undefined
       for (const [id, call] of activeCalls) {
         if (call.tool === toolName && !call.permission) match = id
@@ -498,13 +526,15 @@ function createController(
       call.permission = true
       permissions.add(match)
       paint()
+      await waitForTitle('permission dialog')
     },
 
-    callStarted: (tool, id) => {
+    callStarted: async (tool, id) => {
       activeCalls.set(id, { tool, permission: false })
       if (tool === 'AskUserQuestion') {
         questions.add(id)
         paint()
+        await waitForTitle('question dialog')
       }
     },
 
@@ -600,14 +630,14 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('classic.PermissionRequest', ($, e, next) => {
-    control($, holder).permissionAsked(e.tool_name)
+  on('classic.PermissionRequest', async ($, e, next) => {
+    await control($, holder).permissionAsked(e.tool_name)
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
     const c = control($, holder)
-    c.callStarted(e.tool, e.tool_use_id)
+    await c.callStarted(e.tool, e.tool_use_id)
     try {
       const result = await next(e)
       c.callFinished(e.tool_use_id, result)

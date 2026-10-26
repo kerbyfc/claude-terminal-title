@@ -28,6 +28,9 @@ type Harness = {
   setResult: (result: unknown) => void
   setEnv: (value: string | undefined) => void
   setOs: (value: string | undefined) => void
+  setWriteGate: (gate: Promise<void> | undefined) => void
+  atPermission?: string
+  atToolCall?: string
   denyWrite: boolean
 }
 
@@ -39,6 +42,7 @@ function harness(on: any): Harness {
   let result: unknown = {}
   let env: string | undefined = '1'
   let os: string | undefined
+  let writeGate: Promise<void> | undefined
 
   const writes: string[] = []
   const logs: string[] = []
@@ -69,11 +73,15 @@ function harness(on: any): Harness {
     setOs: value => {
       os = value
     },
+    setWriteGate: gate => {
+      writeGate = gate
+    },
     denyWrite: false,
   }
 
-  on('fs.write', (_: any, e: any) => {
+  on('fs.write', async (_: any, e: any) => {
     state.attempts += 1
+    if (writeGate !== undefined) await writeGate
     if (state.denyWrite) return { deny: 'no tty in the test' }
     writes.push(e.text)
     return { value: undefined }
@@ -107,13 +115,17 @@ function harness(on: any): Harness {
   })
   on('classic.SessionStart', () => ({}))
   on('classic.UserPromptSubmit', () => ({}))
-  on('classic.PermissionRequest', () => ({}))
+  on('classic.PermissionRequest', () => {
+    state.atPermission = state.last()
+    return {}
+  })
   on('classic.SubagentStop', () => ({}))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.end', (_: any, e: any) => ({ sessionId: e.sessionId }))
   on('turn.start', (_: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('tool.call', async () => {
+    state.atToolCall = state.last()
     if (gate !== undefined) await gate
     return { result }
   })
@@ -290,20 +302,40 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
   h.setTranscript('{"type":"ai-title","aiTitle":"Fix auth"}')
   await start($, h, clock)
 
+  await $.turn.start({ text: 'Run the permissioned tool', turnId: 'main' })
+  await clock.settle()
+  expect(h.last()).toBe('⠋ Fix auth')
+
   let release!: () => void
   h.setGate(new Promise<void>(resolve => {
     release = resolve
   }))
   const call = $.tool.call({ tool: 'Bash', command: 'ls' })
   await clock.settle()
-  expect(h.last()).toBe('Fix auth')
+  expect(h.last()).toBe('⠋ Fix auth')
 
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   await clock.settle()
+  expect(h.atPermission).toBe('◉ Fix auth')
+  expect(h.last()).toBe('◉ Fix auth')
+
+  // The waiting marker must not be overwritten by a spinner frame while the
+  // dialog is open; the timer is stopped when the mode turns waiting.
+  await clock.advance(300)
   expect(h.last()).toBe('◉ Fix auth')
 
   release()
   await call
+  await clock.settle()
+  expect(h.last()).toBe('⠋ Fix auth')
+
+  await $.turn.complete({
+    answer: 'Done.',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'main',
+    reason: 'answer',
+  })
   await clock.settle()
   expect(h.last()).toBe('Fix auth')
 
@@ -315,6 +347,10 @@ test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => 
   const h = harness(on)
   h.setTranscript('{"type":"ai-title","aiTitle":"Fix auth"}')
   await start($, h, clock)
+
+  await $.turn.start({ text: 'Ask a question', turnId: 'main' })
+  await clock.settle()
+  expect(h.last()).toBe('⠋ Fix auth')
 
   let release!: () => void
   h.setGate(new Promise<void>(resolve => {
@@ -335,10 +371,24 @@ test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => 
     ],
   })
   await clock.settle()
+  expect(h.atToolCall).toBe('◉ Fix auth')
+  expect(h.last()).toBe('◉ Fix auth')
+
+  await clock.advance(300)
   expect(h.last()).toBe('◉ Fix auth')
 
   release()
   await call
+  await clock.settle()
+  expect(h.last()).toBe('⠋ Fix auth')
+
+  await $.turn.complete({
+    answer: 'Done.',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'main',
+    reason: 'answer',
+  })
   await clock.settle()
   expect(h.last()).toBe('Fix auth')
 
@@ -561,6 +611,53 @@ test('session end clears the title', async ($, on) => {
 
   await clock.advance(1000)
   expect(h.last()).toBe('')
+})
+
+test('a stuck title write does not hold the permission dialog', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setTranscript('{"type":"ai-title","aiTitle":"Fix auth"}')
+  await start($, h, clock)
+
+  await $.turn.start({ text: 'Run the permissioned tool', turnId: 'main' })
+  await clock.settle()
+
+  let releaseTool!: () => void
+  h.setGate(new Promise<void>(resolve => {
+    releaseTool = resolve
+  }))
+  const call = $.tool.call({ tool: 'Bash', command: 'ls' })
+  await clock.settle()
+
+  let releaseWrite!: () => void
+  h.setWriteGate(new Promise<void>(resolve => {
+    releaseWrite = resolve
+  }))
+
+  const permission = $.classic.PermissionRequest({
+    tool_name: 'Bash',
+    tool_input: {},
+  })
+  await clock.advance(250)
+  await permission
+  expect(h.logs.some(line => line.includes('did not finish within 250ms'))).toBe(true)
+
+  releaseWrite()
+  await clock.settle()
+  releaseTool()
+  await call
+  await clock.settle()
+
+  await $.turn.complete({
+    answer: 'Done.',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'main',
+    reason: 'answer',
+  })
+  await clock.settle()
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
 
 test('a Windows session refuses the /dev/tty transport', async ($, on) => {

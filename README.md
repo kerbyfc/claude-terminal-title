@@ -37,7 +37,7 @@ An `env` value in a settings file is applied before the terminal interface start
 
 ## Settings
 
-The options are read from `pluginConfigs` in `~/.claude/settings.json`, keyed by the plugin's name:
+The options are read from `pluginConfigs` in `~/.claude/settings.json`, keyed by the plugin id. The installed plugin's key is `terminal-title@claude-terminal-title`; a plugin loaded with `--plugin-dir` uses `terminal-title` or `terminal-title@inline`.
 
 ```json
 {
@@ -45,7 +45,7 @@ The options are read from `pluginConfigs` in `~/.claude/settings.json`, keyed by
     "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
   },
   "pluginConfigs": {
-    "terminal-title": {
+    "terminal-title@claude-terminal-title": {
       "options": {
         "strip": "",
         "marker": "◉",
@@ -57,7 +57,9 @@ The options are read from `pluginConfigs` in `~/.claude/settings.json`, keyed by
 }
 ```
 
-- `strip` — a JavaScript regular expression source. Its first match is removed from the session name **in the terminal title only**; the session's own name is not changed. Default: empty, so nothing is stripped. Use it to cut what another session-naming automation adds — status tags such as `[ ]`/`[x]`, task prefixes, ticket numbers — so the title keeps only the name. Example: `"strip": "^\\[[ xX]\\] "` turns `[ ] Fix auth` and `[x] Fix auth` into `Fix auth`. An invalid expression is logged once in the transcript and nothing is stripped; the plugin keeps running.
+An installed plugin's settings key is `<name>@<marketplace>`: here `terminal-title@claude-terminal-title`, the id `claude plugin list` shows. The short `terminal-title` is not the installed id — `claude plugin configure terminal-title` reports no such installed plugin (or, in the menu, shows every option unset) and does not read these values; `claude plugin configure terminal-title@claude-terminal-title` reads them. A `--plugin-dir` plugin is the other case: its key is `terminal-title` or `terminal-title@inline`.
+
+- `strip` — a JavaScript regular expression source. Its first match is removed from the session name **in the terminal title only**; the session's own name is not changed. Default: empty, so nothing is stripped. Use it to cut what another session-naming automation adds — status tags such as `[ ]`/`[x]`, task prefixes, ticket numbers — so the title keeps only the name. Example: `"strip": "^\\[[ xX]\\]\\s*"` turns `[ ] Fix auth` and `[x] Fix auth` into `Fix auth`. Claude Code's configure command trims trailing whitespace from a value: an input ending in a space is stored without it, so write the required whitespace as `\s` or a character class; the example uses `\s*`. An invalid expression is logged once in the transcript and nothing is stripped; the plugin keeps running.
 - `marker` — the symbol prepended when the session is waiting. One space is added after it; set it to `""` to disable the marker. Default: `◉`.
 - `spinner` — frames of the working animation. One space is added after each frame; set it to `[]` to disable the animation. Default: `["◜", "◠", "◝", "◞", "◡", "◟"]`. Claude Code's config menu edits single-valued options only, so set this list in `pluginConfigs` as shown. The OpenCode plugin's `spinner: false` has the same effect as `[]`.
 - `spinnerInterval` — milliseconds between spinner frames. Default: `300`.
@@ -66,11 +68,11 @@ Names are reduced to one printable line, stripped of control characters (includi
 
 ### Compared with the OpenCode plugin
 
-In the OpenCode plugin these are `plugins[].options` in `cli.json`; here they are `pluginConfigs`, with the single-valued fields also in `/config`.
+In the OpenCode plugin these are `plugins[].options` in `cli.json`; here they are `pluginConfigs`, keyed by `terminal-title@claude-terminal-title` for an installed plugin or `terminal-title`/`terminal-title@inline` for a `--plugin-dir` plugin, with the single-valued fields also in `/config`.
 
 | Option | OpenCode plugin | This plugin | Set through | Difference |
 | --- | --- | --- | --- | --- |
-| `strip` | JavaScript regular expression string; its first match is removed from the host title; default `^OC \| ` | JavaScript regular expression string; its first match is removed from the session name in the title only; default empty | `pluginConfigs`, `/config` | Claude Code has no `OC \| ` prefix, so the default is empty; the option remains for other naming automation. An invalid expression fails the OpenCode plugin's load; this plugin logs it and leaves the name unstripped, as requested here. |
+| `strip` | JavaScript regular expression string; its first match is removed from the host title; default `^OC \| ` | JavaScript regular expression string; its first match is removed from the session name in the title only; default empty | `pluginConfigs`, `/config` | Claude Code has no `OC \| ` prefix, so the default is empty; the option remains for other naming automation. An invalid expression fails the OpenCode plugin's load; this plugin logs it and leaves the name unstripped, as requested here. The configure command trims trailing whitespace, so the example writes the tag separator as `\s*`. |
 | `marker` | string; one space is added; default `◉` | the same | `pluginConfigs`, `/config` | none |
 | `spinner` | list of strings, or `false`; default the OpenCode Braille set | `type: "string", multiple: true`; default the six arc frames above; `[]` disables | `pluginConfigs` only; Claude Code's config menu skips list fields | Claude Code's `userConfig` has no array-valued type (a list is `type: "string"` with `multiple: true`) and no boolean form for this field, so `spinner: false` cannot be stored; `[]` is the equivalent. The rule function accepts `false`; the manifest path cannot. |
 | `spinnerInterval` | number of milliseconds; default `100` | number of milliseconds; default `300` | `pluginConfigs`, `/config` | The option shape is the same; the default is 300 here and 100 in the OpenCode plugin. |

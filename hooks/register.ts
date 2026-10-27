@@ -39,6 +39,7 @@ type Controller = {
     session_title?: string
   }) => Promise<void>
   classicPromptSubmit: (e: {
+    prompt?: string
     transcript_path?: string
     session_title?: string
   }) => void
@@ -110,7 +111,9 @@ function createController(
   let transcriptPath: string | undefined
   let name = ''
   let nameKind: NameKind = 'none'
-  let lastAnswer = ''
+  // Set by a main reply ending in `needs input:`; only the user's own prompt
+  // clears it, so later notification turns and running work cannot hide it.
+  let awaitingInput = false
   let painted = ''
   let frame = 0
   let spinner: Timer | undefined
@@ -196,11 +199,11 @@ function createController(
   }
 
   const currentMode = (): Mode => {
-    if (questions.size > 0 || permissions.size > 0) return 'waiting'
+    if (questions.size > 0 || permissions.size > 0 || awaitingInput) return 'waiting'
     if (mainTurns.size > 0 || agents.size > 0 || backgroundTasks.size > 0) {
       return 'busy'
     }
-    return waitsForInput(lastAnswer) ? 'waiting' : 'idle'
+    return 'idle'
   }
 
   const stopSpinner = (): void => {
@@ -271,7 +274,7 @@ function createController(
     mainTurns.clear()
     agents.clear()
     backgroundTasks.clear()
-    lastAnswer = ''
+    awaitingInput = false
     name = ''
     nameKind = 'none'
     painted = ''
@@ -434,7 +437,7 @@ function createController(
         }
       }
       if (firstPrompt !== undefined) setPromptName(firstPrompt)
-      if (lastAssistant !== undefined) lastAnswer = lastAssistant
+      if (lastAssistant !== undefined) awaitingInput = waitsForInput(lastAssistant)
       paint()
     } catch (error) {
       if (current === generation) {
@@ -499,6 +502,10 @@ function createController(
         transcriptPath = e.transcript_path
       }
       if (typeof e.session_title === 'string') setSessionName(e.session_title)
+      // A task notification arrives as a prompt too; it is not the user's answer.
+      if (typeof e.prompt === 'string' && !e.prompt.trimStart().startsWith('<')) {
+        awaitingInput = false
+      }
       paint()
     },
 
@@ -518,7 +525,7 @@ function createController(
         agents.delete(e.agentId)
       } else {
         mainTurns.delete(e.turnId)
-        if (e.answer.trim() !== '') lastAnswer = e.answer
+        if (waitsForInput(e.answer)) awaitingInput = true
         if (nameKind !== 'session' && transcriptPath !== undefined) {
           void refreshTitle(true)
         }

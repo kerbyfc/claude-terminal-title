@@ -4,10 +4,12 @@ A Claude Code plugin that writes the terminal title itself: the session's name w
 
 | State | Terminal title |
 | --- | --- |
-| The main turn is running, any subagent is running (foreground or `run_in_background`), or a `run_in_background` shell is running | `◐ Fix auth` (animated) |
-| The last non-empty line of the assistant's reply starts with `needs input:` | `◍ Fix auth` |
+| A main reply's last non-empty line started with `needs input:`, and you have not sent a prompt since | `◍ Fix auth` |
 | A permission request or an `AskUserQuestion` dialog is pending, including in subagents | `◍ Fix auth` |
+| The main turn is running, any subagent is running (foreground or `run_in_background`), or a `run_in_background` shell is running | `◐ Fix auth` (animated) |
 | Idle | `Fix auth` |
+
+The rows are in priority order: a waiting session shows `◍` even while its subagents or background shells keep working.
 
 ## Install
 
@@ -96,6 +98,7 @@ A terminal title is not the only consumer of this name. The transcript read is b
 - `turn.start` and `turn.complete` count the main turn and any subagent turn that reaches the hooks.
 - A subagent is also counted from `agent.spawn` until `classic.SubagentStop`, because a background subagent's turn does not reach the turn hooks.
 - `tool.call` counts an `AskUserQuestion` dialog from its start until its answer, and recognizes a `Bash` call's `backgroundTaskId`. The matching `<task-id>` in a background task notification clears it.
+- A main reply ending in `needs input:` sets a waiting flag that stays until your next `UserPromptSubmit`. Later turns started by a background task notification do not clear it, and a prompt starting with `<` (a notification) is not counted as your answer.
 - `classic.PermissionRequest` marks a pending permission request and the same tool call clears it after the tool returns. The permission and `AskUserQuestion` hooks write the marker and wait for it to reach `/dev/tty` before they let the dialog open. A marker write still in flight when the dialog opens is too late: the dialog takes the screen and the waiting state has already stopped the spinner, so the last frame stays. Waiting for the write first keeps the marker on screen for the whole dialog. The wait is bounded at 250 ms: a stalled write logs a line and lets the dialog open without the marker.
 - `session.append` notices a `/rename` command or a "user named this session" note and refreshes the title from the transcript.
 - The title is written as an OSC 0 sequence to `/dev/tty`. If that write fails, the plugin stops writing and says why in the transcript instead of failing silently.

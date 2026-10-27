@@ -501,6 +501,54 @@ test('a background subagent keeps the title busy after the main turn', async ($,
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
 
+test('needs input outlasts running work and later turns until the user answers', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setTranscript('{"type":"ai-title","aiTitle":"Fix auth"}')
+  await start($, h, clock)
+
+  await $.turn.start({ text: 'Spawn work', turnId: 'main' })
+  await $.agent.spawn({
+    tool_use_id: 'toolu-test',
+    prompt: 'Run the tests',
+    description: 'Run the tests',
+    subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'test-model',
+    background: true,
+    fork: false,
+  })
+  await $.turn.complete({
+    answer: 'Spawned.\nneeds input: [question](obsidian://x)',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'main',
+    reason: 'answer',
+  })
+  await clock.settle()
+  expect(h.last()).toBe('◍ Fix auth')
+
+  await $.classic.UserPromptSubmit({
+    prompt: '<task-notification>\n<task-id>agent-1</task-id>\n</task-notification>',
+  })
+  await $.turn.start({ text: '<task-notification>', turnId: 'note' })
+  await $.turn.complete({
+    answer: 'One agent is done.',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'note',
+    reason: 'answer',
+  })
+  await clock.settle()
+  expect(h.last()).toBe('◍ Fix auth')
+
+  await $.classic.UserPromptSubmit({ prompt: 'Option b' })
+  await clock.settle()
+  expect(h.last()).toBe('◐ Fix auth')
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
 test('a background shell keeps the title busy until its notification', async ($, on) => {
   const clock = mock.clock(on)
   const h = harness(on)

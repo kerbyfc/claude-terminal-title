@@ -47,7 +47,7 @@ type Controller = {
   turnComplete: (e: { answer: string; turnId: string; agentId?: string }) => void
   permissionAsked: (toolName: string) => Promise<void>
   callStarted: (tool: string, id: string) => Promise<void>
-  callFinished: (id: string, result: unknown) => void
+  callFinished: (tool: string, id: string, result: unknown) => void
   agentStarted: (agentId: string | undefined) => void
   agentStopped: (agentId: string | undefined) => void
   appended: (e: { door: string; message: { content?: unknown } }) => void
@@ -90,6 +90,16 @@ function backgroundTaskOf(result: unknown): string | undefined {
   return typeof bash.backgroundTaskId === 'string' && bash.backgroundTaskId !== ''
     ? bash.backgroundTaskId
     : undefined
+}
+
+// A task stopped with TaskStop sends no completion notification: the stop's
+// own result names the shell or agent that is gone.
+function stoppedTaskOf(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null) return undefined
+  const value = (result as { result?: unknown }).result
+  if (typeof value !== 'object' || value === null) return undefined
+  const id = (value as { task_id?: unknown }).task_id
+  return typeof id === 'string' && id !== '' ? id : undefined
 }
 
 function createController(
@@ -556,9 +566,18 @@ function createController(
       }
     },
 
-    callFinished: (id, result) => {
+    callFinished: (tool, id, result) => {
       activeCalls.delete(id)
       if (questions.delete(id) || permissions.delete(id)) paint()
+      if (tool === 'TaskStop') {
+        const stopped = stoppedTaskOf(result)
+        if (stopped !== undefined) {
+          const shell = backgroundTasks.delete(stopped)
+          const agent = agents.delete(stopped)
+          if (shell || agent) paint()
+        }
+        return
+      }
       const task = backgroundTaskOf(result)
       if (task !== undefined) {
         backgroundTasks.add(task)
@@ -673,10 +692,10 @@ export const register: Register = (on, options) => {
     await c.callStarted(e.tool, e.tool_use_id)
     try {
       const result = await next(e)
-      c.callFinished(e.tool_use_id, result)
+      c.callFinished(e.tool, e.tool_use_id, result)
       return result
     } catch (error) {
-      c.callFinished(e.tool_use_id, undefined)
+      c.callFinished(e.tool, e.tool_use_id, undefined)
       throw error
     }
   })

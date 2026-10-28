@@ -582,6 +582,53 @@ test('a background shell keeps the title busy until its notification', async ($,
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
 
+test('a background shell stopped with TaskStop leaves the title idle', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setCustom('{"customTitle":"Fix auth"}')
+  await start($, h, clock)
+
+  h.setResult({ backgroundTaskId: 'task-1' })
+  await $.tool.call({ tool: 'Bash', command: 'sleep 300', run_in_background: true })
+  await clock.settle()
+  expect(h.last()).toBe('◐ Fix auth')
+
+  // A stopped task sends no notification: the stop's own result is the only signal.
+  h.setResult({ message: 'Successfully stopped task: task-1', task_id: 'task-1', task_type: 'local_bash' })
+  await $.tool.call({ tool: 'TaskStop', task_id: 'task-1' })
+  await clock.settle()
+  expect(h.last()).toBe('Fix auth')
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a background subagent stopped with TaskStop leaves the title idle', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setCustom('{"customTitle":"Fix auth"}')
+  await start($, h, clock)
+
+  await $.agent.spawn({
+    tool_use_id: 'toolu-test',
+    prompt: 'Run the tests',
+    description: 'Run the tests',
+    subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'test-model',
+    background: true,
+    fork: false,
+  })
+  await clock.settle()
+  expect(h.last()).toBe('◐ Fix auth')
+
+  h.setResult({ message: 'Successfully stopped task: agent-1', task_id: 'agent-1', task_type: 'local_agent' })
+  await $.tool.call({ tool: 'TaskStop', task_id: 'agent-1' })
+  await clock.settle()
+  expect(h.last()).toBe('Fix auth')
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
 test(
   'a custom marker, spinner list, and interval',
   { options: { marker: '▲', spinner: ['a', 'b'], spinnerInterval: 5 } },

@@ -38,6 +38,7 @@ type Harness = {
   setWriteGate: (gate: Promise<void> | undefined) => void
   setFile: (path: string, text: string | undefined) => void
   reads: string[]
+  files: Map<string, string>
   atPermission?: string
   atToolCall?: string
   denyWrite: boolean
@@ -92,12 +93,17 @@ function harness(on: any): Harness {
       else files.set(path, text)
     },
     reads,
+    files,
     denyWrite: false,
   }
 
   on('fs.write', async (_: any, e: any) => {
-    state.attempts += 1
+    if (e.path === '/dev/tty') state.attempts += 1
     if (writeGate !== undefined) await writeGate
+    if (e.path !== '/dev/tty') {
+      files.set(e.path, e.text)
+      return { value: undefined }
+    }
     if (state.denyWrite) return { deny: 'no tty in the test' }
     writes.push(e.text)
     return { value: undefined }
@@ -747,6 +753,109 @@ test('a new conversation after the move draws the title again', async ($, on) =>
   await $.classic.SessionStart({ source: 'startup', transcript_path: '/tmp/terminal-title/next.jsonl' })
   await clock.settle()
   expect(h.last()).toBe('Next task')
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+const NAMES = `${HOME}/.claude/plugins/data/terminal-title/names`
+
+async function startFork($: any, h: Harness, clock: any): Promise<void> {
+  await $.classic.SessionStart({
+    source: 'fork',
+    transcript_path: '/tmp/terminal-title/ses.jsonl',
+    session_title: 'configure-passwords-prompt',
+  })
+  await $.session.start({
+    cwd: '/tmp/terminal-title',
+    surface: 'terminal',
+    isInteractive: true,
+  })
+  await $.turn.start({ text: '', turnId: 'resumed' })
+  await clock.settle()
+}
+
+function renameCommand(name: string): any {
+  return {
+    door: 'command',
+    origin: { kind: 'engine' },
+    uuid: '00000000-0000-4000-8000-000000000003',
+    message: {
+      type: 'system',
+      name: 'local_command',
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `<command-name>/rename</command-name><command-args>${name}</command-args>`,
+        },
+      ],
+    },
+  }
+}
+
+test('the shown name is kept for a background session that continues the conversation', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setMessages([{ role: 'user', text: 'Create a cmd to pull master' }])
+  await start($, h, clock)
+  expect(h.last()).toBe('Create a cmd to pull master')
+  expect(JSON.parse(h.files.get(`${NAMES}/ses.json`) ?? '{}')).toEqual({ name: 'Create a cmd to pull master' })
+
+  h.setCustom('{"customTitle":"Fix auth"}')
+  await $.session.append(renameCommand('Fix auth'))
+  await clock.advance(100)
+  expect(h.last()).toBe('Fix auth')
+  expect(JSON.parse(h.files.get(`${NAMES}/ses.json`) ?? '{}')).toEqual({ name: 'Fix auth' })
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a background session shows the name its parent showed, not its generated one', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setTranscript('{"type":"ai-title","aiTitle":"configure-passwords-prompt"}')
+  h.setCustom('{"customTitle":"[ ] configure-passwords-prompt"}')
+  h.setMessages([{ role: 'user', text: 'Create a cmd to pull master' }])
+  h.setFile(`${RECORDS}/45801.json`, record({ pid: 45801, sessionId: 'ses', kind: 'bg', jobId: 'job1' }))
+  await startFork($, h, clock)
+  // The parent marks its record a moment after the background session starts.
+  await clock.advance(1000)
+  expect(h.titles()).toEqual([])
+  h.setFile(`${NAMES}/parent.json`, JSON.stringify({ name: 'Create a cmd for pulling master' }))
+  h.setFile(`${RECORDS}/61144.json`, record({ pid: 61144, sessionId: 'parent', parkedJobId: 'job1' }))
+  await clock.advance(500)
+  expect(h.last()).toBe('◐ Create a cmd for pulling master')
+
+  // A hook's rename and the end of the turn keep it.
+  await $.classic.UserPromptSubmit({ prompt: '<task-notification>', session_title: '[x] configure-passwords-prompt' })
+  await $.turn.complete({ answer: 'Done.', durationMs: 1, isAborted: false, turnId: 'resumed', reason: 'answer' })
+  await clock.advance(2000)
+  expect(h.last()).toBe('Create a cmd for pulling master')
+  expect(h.titles().some(title => title.includes('configure-passwords-prompt'))).toBe(false)
+
+  // The user's own rename wins.
+  h.setCustom('{"customTitle":"Owner name"}')
+  await $.session.append(renameCommand('Owner name'))
+  await clock.advance(100)
+  expect(h.last()).toBe('Owner name')
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a background session with no parent found shows its first prompt and says why', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setTranscript('{"type":"ai-title","aiTitle":"configure-passwords-prompt"}')
+  h.setMessages([{ role: 'user', text: 'Create a cmd to pull master' }])
+  h.setFile(`${RECORDS}/45801.json`, record({ pid: 45801, sessionId: 'ses', kind: 'bg', jobId: 'job1' }))
+  await startFork($, h, clock)
+  await clock.advance(4000)
+  expect(h.titles()).toEqual([])
+
+  await clock.advance(2000)
+  expect(h.last()).toMatch(/^[◐◓◑◒] Create a cmd to pull master$/)
+  expect(h.logs.some(line => line.includes('a session moved to background job job1'))).toBe(true)
+  expect(h.titles().some(title => title.includes('configure-passwords-prompt'))).toBe(false)
 
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })

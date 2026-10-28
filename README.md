@@ -101,6 +101,7 @@ A terminal title is not the only consumer of this name. The transcript read is b
 - A main reply ending in `needs input:` sets a waiting flag that stays until your next `UserPromptSubmit`. Later turns started by a background task notification do not clear it, and a prompt starting with `<` (a notification) is not counted as your answer.
 - `classic.PermissionRequest` marks a pending permission request and the same tool call clears it after the tool returns. The permission and `AskUserQuestion` hooks write the marker and wait for it to reach `/dev/tty` before they let the dialog open. A marker write still in flight when the dialog opens is too late: the dialog takes the screen and the waiting state has already stopped the spinner, so the last frame stays. Waiting for the write first keeps the marker on screen for the whole dialog. The wait is bounded at 250 ms: a stalled write logs a line and lets the dialog open without the marker.
 - `session.append` notices a `/rename` command or a "user named this session" note and refreshes the title from the transcript.
+- A conversation moved to a background session (the left arrow at the prompt) takes its turn and its background tasks with it, and their ends reach the background session's process only. Claude Code tells a plugin nothing about the move; it sets `parkedJobId` on the process's record in `~/.claude/sessions/<pid>.json` (under `CLAUDE_CONFIG_DIR` when set). While work runs, the plugin reads that record once a second; when the field appears it drops the spinner, writes the title once without it, and writes nothing more, so the background session's own process is the one writer while you look at it. A conversation the process starts afterwards draws the title again. An idle session does not read the record.
 - The title is written as an OSC 0 sequence to `/dev/tty`. If that write fails, the plugin stops writing and says why in the transcript instead of failing silently.
 
 ## Test
@@ -117,6 +118,7 @@ The type declarations under `.claude-plugin/types/` are written by Claude Code w
 
 - The marker stays from a permission request until the permissioned tool returns. Claude Code reports the request and the tool's end but not the answer in between, so a long approved tool keeps the marker while it runs.
 - A background task that was already running when the plugin loaded is not known; it is picked up when its next notification arrives.
+- The move to a background session is read from Claude Code's own session records, which are not a documented interface; a change to their format stops the detection, and the spinner then keeps running after a move as it did before.
 - The title is written only when the session started on the `terminal` surface. A `-p` run, the SDK and the desktop app have no terminal title to write.
 - `/dev/tty` is the verified transport on macOS. Windows has no such terminal path, so the plugin refuses there with a transcript line instead of writing a file; another transport is not implemented.
 - The name and the title are computed from events. A session resumed with a transcript over 4 MiB has no generated title to read, as described above.

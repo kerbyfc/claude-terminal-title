@@ -16,6 +16,7 @@ import {
   parseCustomTitleFile,
   parseTranscriptTitles,
 } from './session-title'
+import { parseSessionRecord, sessionRecordsDir } from './session-record'
 
 const TTY = '/dev/tty'
 const TITLE_POLL_MS = 1000
@@ -23,6 +24,9 @@ const TITLE_POLL_MS = 1000
 // poll is a safety net, not a permanent read of the transcript.
 const TITLE_POLL_TICKS = 30
 const RENAME_REFRESH_MS = [100, 800] as const
+// While work runs, the process's session record is read this often to notice
+// the conversation moving to a background session.
+const PARK_POLL_MS = 1000
 
 type NameKind = 'none' | 'prompt' | 'session'
 
@@ -138,6 +142,15 @@ function createController(
   let titleReadFailureReported = false
   let statFailureReported = false
   let customReadFailureReported = false
+  // The conversation moved to a background session: that session's own
+  // process draws the title now, and this one writes nothing until it starts
+  // a conversation of its own.
+  let parked = false
+  let parkPoll: Timer | undefined
+  let parkChecking = false
+  let recordPath: string | undefined
+  let recordsDir: string | undefined
+  let registryFailureReported = false
 
   const oneShots: Timer[] = []
   const activeCalls = new Map<string, ActiveCall>()
@@ -158,7 +171,7 @@ function createController(
   if (stripError !== undefined) report(stripError)
 
   const writeTitle = (title: string, silent = false): void => {
-    if (!hasSurface) return
+    if (!hasSurface || parked) return
     if (writeFailed && !silent) return
     pending = title
     if (writing) return
@@ -208,11 +221,12 @@ function createController(
     }
   }
 
+  const hasRunningWork = (): boolean =>
+    mainTurns.size > 0 || agents.size > 0 || backgroundTasks.size > 0
+
   const currentMode = (): Mode => {
     if (questions.size > 0 || permissions.size > 0 || awaitingInput) return 'waiting'
-    if (mainTurns.size > 0 || agents.size > 0 || backgroundTasks.size > 0) {
-      return 'busy'
-    }
+    if (hasRunningWork()) return 'busy'
     return 'idle'
   }
 
@@ -222,7 +236,7 @@ function createController(
   }
 
   const syncSpinner = (mode: Mode): void => {
-    if (mode !== 'busy' || frames.length <= 1 || !hasSurface) {
+    if (mode !== 'busy' || frames.length <= 1 || !hasSurface || parked) {
       stopSpinner()
       return
     }
@@ -234,15 +248,131 @@ function createController(
     })
   }
 
+  const titleName = (): string =>
+    strip === undefined ? name : name.replace(strip, '').trimStart()
+
   const paint = (): void => {
+    if (parked) return
     const mode = currentMode()
     syncSpinner(mode)
-    const titleName =
-      strip === undefined ? name : name.replace(strip, '').trimStart()
-    const title = composeTitle(mode, titleName, marker, frames, frame)
+    syncParkPoll()
+    const title = composeTitle(mode, titleName(), marker, frames, frame)
     if (title === painted) return
     painted = title
     writeTitle(title)
+  }
+
+  const stopParkPoll = (): void => {
+    parkPoll?.cancel()
+    parkPoll = undefined
+  }
+
+  const syncParkPoll = (): void => {
+    if (!hasSurface || parked || !hasRunningWork()) {
+      stopParkPoll()
+      return
+    }
+    if (parkPoll !== undefined) return
+    parkPoll = $.clock.every(PARK_POLL_MS, () => {
+      void checkParked()
+    })
+  }
+
+  const reportRegistry = (text: string): void => {
+    if (registryFailureReported) return
+    registryFailureReported = true
+    report(text)
+  }
+
+  const resolveRecordsDir = async (): Promise<string | undefined> => {
+    if (recordsDir !== undefined) return recordsDir
+    const dir = sessionRecordsDir(
+      await $.env.get('CLAUDE_CONFIG_DIR'),
+      await $.env.get('HOME'),
+    )
+    if (dir === undefined) {
+      reportRegistry('cannot find the session records: neither CLAUDE_CONFIG_DIR nor HOME is set')
+      return undefined
+    }
+    recordsDir = dir
+    return dir
+  }
+
+  // The record's file is named after the process id, which a plugin does not
+  // know: the first check finds it by session id, later checks read it alone.
+  const findRecord = async (dir: string, sessionId: string): Promise<string | undefined> => {
+    for (const entry of await $.fs.list(dir)) {
+      if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+      const path = `${dir}/${entry.name}`
+      let text: string
+      try {
+        text = await $.fs.read(path)
+      } catch {
+        // A process that just exited takes its record with it.
+        continue
+      }
+      const record = parseSessionRecord(text)
+      if (record?.sessionId === sessionId && record.kind === 'interactive') return path
+    }
+    return undefined
+  }
+
+  const checkParked = async (): Promise<void> => {
+    if (parkChecking || parked) return
+    parkChecking = true
+    const current = generation
+    try {
+      const dir = await resolveRecordsDir()
+      if (dir === undefined) return
+      const sessionId = await $.session.id()
+      if (current !== generation) return
+      recordPath ??= await findRecord(dir, sessionId)
+      if (current !== generation || recordPath === undefined) return
+      let text: string
+      try {
+        text = await $.fs.read(recordPath)
+      } catch {
+        recordPath = undefined
+        return
+      }
+      if (current !== generation) return
+      const record = parseSessionRecord(text)
+      if (record === undefined || record.sessionId !== sessionId) {
+        recordPath = undefined
+        return
+      }
+      if (record.parkedJobId !== undefined) park()
+    } catch (error) {
+      if (current === generation) {
+        reportRegistry(`cannot read the session records: ${reasonOf(error)}`)
+      }
+    } finally {
+      parkChecking = false
+    }
+  }
+
+  // The turn and the tasks went with the conversation; their ends reach the
+  // background session, not this process. The title loses its spinner once
+  // and is left to the background session.
+  const park = (): void => {
+    stopSpinner()
+    stopPoll()
+    stopParkPoll()
+    for (const timer of oneShots) timer.cancel()
+    oneShots.length = 0
+    activeCalls.clear()
+    questions.clear()
+    permissions.clear()
+    mainTurns.clear()
+    agents.clear()
+    backgroundTasks.clear()
+    awaitingInput = false
+    const title = composeTitle('idle', titleName(), marker, frames, frame)
+    if (title !== painted) {
+      painted = title
+      writeTitle(title)
+    }
+    parked = true
   }
 
   const stopPoll = (): void => {
@@ -276,6 +406,9 @@ function createController(
     generation += 1
     stopSpinner()
     stopPoll()
+    stopParkPoll()
+    parked = false
+    recordPath = undefined
     for (const timer of oneShots) timer.cancel()
     oneShots.length = 0
     activeCalls.clear()
@@ -296,6 +429,7 @@ function createController(
   const startTitlePoll = (): void => {
     if (
       !hasSurface ||
+      parked ||
       poll !== undefined ||
       nameKind === 'session' ||
       transcriptPath === undefined
@@ -497,7 +631,9 @@ function createController(
     sessionStart,
 
     classicSessionStart: async e => {
-      if (e.source === 'clear') reset()
+      // A conversation this process starts after its last one moved to the
+      // background is its own again.
+      if (e.source === 'clear' || parked) reset()
       const current = generation
       if (typeof e.transcript_path === 'string' && e.transcript_path !== '') {
         transcriptPath = e.transcript_path

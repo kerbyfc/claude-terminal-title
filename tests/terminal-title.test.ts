@@ -15,6 +15,12 @@ import {
 } from '../hooks/session-title'
 
 const OSC = /\x1b\]0;([^\x07]*)\x07/
+const HOME = '/home/test'
+const RECORDS = `${HOME}/.claude/sessions`
+
+function record(fields: Record<string, unknown>): string {
+  return JSON.stringify({ pid: 1, cwd: '/tmp/terminal-title', kind: 'interactive', ...fields })
+}
 
 type Harness = {
   writes: string[]
@@ -30,6 +36,8 @@ type Harness = {
   setEnv: (value: string | undefined) => void
   setOs: (value: string | undefined) => void
   setWriteGate: (gate: Promise<void> | undefined) => void
+  setFile: (path: string, text: string | undefined) => void
+  reads: string[]
   atPermission?: string
   atToolCall?: string
   denyWrite: boolean
@@ -44,6 +52,8 @@ function harness(on: any): Harness {
   let env: string | undefined = '1'
   let os: string | undefined
   let writeGate: Promise<void> | undefined
+  const files = new Map<string, string>()
+  const reads: string[] = []
 
   const writes: string[] = []
   const logs: string[] = []
@@ -77,6 +87,11 @@ function harness(on: any): Harness {
     setWriteGate: gate => {
       writeGate = gate
     },
+    setFile: (path, text) => {
+      if (text === undefined) files.delete(path)
+      else files.set(path, text)
+    },
+    reads,
     denyWrite: false,
   }
 
@@ -88,6 +103,10 @@ function harness(on: any): Harness {
     return { value: undefined }
   })
   on('fs.read', (_: any, e: any) => {
+    reads.push(e.path)
+    const file = files.get(e.path)
+    if (file !== undefined) return { value: file }
+    if (e.path.startsWith(`${HOME}/`)) return { deny: 'ENOENT' }
     if (e.path.endsWith('custom-title.json')) {
       return custom === undefined ? { deny: 'ENOENT' } : { value: custom }
     }
@@ -101,14 +120,26 @@ function harness(on: any): Harness {
       isLink: false,
     },
   }))
+  on('fs.list', (_: any, e: any) => {
+    reads.push(`list ${e.path}`)
+    const prefix = `${e.path}/`
+    return {
+      value: [...files.keys()]
+        .filter(path => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
+        .map(path => ({ name: path.slice(prefix.length), kind: 'file', size: 1, mtimeMs: 1 })),
+    }
+  })
   on('env.get', (_: any, e: any) => ({
     value:
       e.name === 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE'
         ? env
         : e.name === 'OS'
           ? os
-          : undefined,
+          : e.name === 'HOME'
+            ? HOME
+            : undefined,
   }))
+  on('session.id', () => ({ value: 'ses' }))
   on('session.messages', () => ({ value: messages }))
   on('ui.log', (_: any, e: any) => {
     logs.push(e.text)
@@ -625,6 +656,97 @@ test('a background subagent stopped with TaskStop leaves the title idle', async 
   await $.tool.call({ tool: 'TaskStop', task_id: 'agent-1' })
   await clock.settle()
   expect(h.last()).toBe('Fix auth')
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a conversation moved to a background session leaves this process silent', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setCustom('{"customTitle":"Fix auth"}')
+  h.setFile(`${RECORDS}/41.json`, record({ pid: 41, sessionId: 'other', parkedJobId: 'other123' }))
+  h.setFile(`${RECORDS}/42.json`, record({ pid: 42, sessionId: 'ses', status: 'busy' }))
+  await start($, h, clock)
+
+  // The turn and a background shell move with the conversation; neither end
+  // ever reaches this process.
+  await $.turn.start({ text: 'Configure passwords', turnId: 'main' })
+  h.setResult({ backgroundTaskId: 'task-1' })
+  await $.tool.call({ tool: 'Bash', command: 'sleep 90', run_in_background: true })
+  await clock.settle()
+  expect(h.last()).toBe('◐ Fix auth')
+
+  // Another process's parked record is not this one's.
+  await clock.advance(1000)
+  expect(h.last()).not.toBe('Fix auth')
+
+  h.setFile(`${RECORDS}/42.json`, record({ pid: 42, sessionId: 'ses', status: 'busy', parkedJobId: '5d52bd41' }))
+  await clock.advance(1000)
+  expect(h.last()).toBe('Fix auth')
+
+  const count = h.writes.length
+  await clock.advance(5000)
+  await $.turn.complete({
+    answer: 'Done.\nneeds input: x',
+    durationMs: 1,
+    isAborted: true,
+    turnId: 'main',
+    reason: 'aborted',
+  })
+  await $.turn.start({ text: 'late', turnId: 'late' })
+  await clock.advance(5000)
+  expect(h.writes.length).toBe(count)
+
+  // Once parked the record is not read any more.
+  const reads = h.reads.length
+  await clock.advance(5000)
+  expect(h.reads.length).toBe(reads)
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('an idle session does not read the session records', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setCustom('{"customTitle":"Fix auth"}')
+  h.setFile(`${RECORDS}/42.json`, record({ pid: 42, sessionId: 'ses' }))
+  await start($, h, clock)
+  await clock.advance(5000)
+  expect(h.reads.filter(path => path.includes('/sessions'))).toEqual([])
+
+  await $.turn.start({ text: 'Work', turnId: 'main' })
+  await clock.advance(2000)
+  expect(h.reads.filter(path => path.includes('/sessions')).length).toBeGreaterThan(0)
+
+  await $.turn.complete({
+    answer: 'Done.',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'main',
+    reason: 'answer',
+  })
+  await clock.settle()
+  const reads = h.reads.length
+  await clock.advance(5000)
+  expect(h.reads.length).toBe(reads)
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a new conversation after the move draws the title again', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setCustom('{"customTitle":"Fix auth"}')
+  h.setFile(`${RECORDS}/42.json`, record({ pid: 42, sessionId: 'ses', parkedJobId: '5d52bd41' }))
+  await start($, h, clock)
+  await $.turn.start({ text: 'Configure passwords', turnId: 'main' })
+  await clock.advance(1000)
+  expect(h.last()).toBe('Fix auth')
+
+  h.setCustom('{"customTitle":"Next task"}')
+  await $.classic.SessionStart({ source: 'startup', transcript_path: '/tmp/terminal-title/next.jsonl' })
+  await clock.settle()
+  expect(h.last()).toBe('Next task')
 
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })

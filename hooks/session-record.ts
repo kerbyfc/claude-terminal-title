@@ -54,3 +54,7 @@ export function claudeConfigDir(configDir: string | undefined, home: string | un
 export const sessionRecordsDir = (config: string): string => `${config}/sessions`
 
 export const shownNamesDir = (config: string): string => `${config}/plugins/data/terminal-title/names`
+
+// On Windows the title goes through a file per session that the title helper
+// reads: the title text followed by one "\n".
+export const titlesDir = (config: string): string => `${config}/plugins/data/terminal-title/titles`

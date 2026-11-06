@@ -1,6 +1,6 @@
 {
   "name": "claude-terminal-title",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "description": "Development scripts for the terminal-title Claude Code plugin",

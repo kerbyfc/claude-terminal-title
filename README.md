@@ -103,7 +103,8 @@ A terminal title is not the only consumer of this name. The transcript read is b
 - `session.append` notices a `/rename` command or a "user named this session" note and refreshes the title from the transcript.
 - A conversation moved to a background session (the left arrow at the prompt) takes its turn and its background tasks with it, and their ends reach the background session's process only. Claude Code tells a plugin nothing about the move; it sets `parkedJobId` on the process's record in `~/.claude/sessions/<pid>.json` (under `CLAUDE_CONFIG_DIR` when set). While work runs, the plugin reads that record once a second; when the field appears it drops the spinner, writes the title once without it, and writes nothing more, so the background session's own process is the one writer while you look at it. A conversation the process starts afterwards draws the title again. An idle session does not read the record.
 - The background session that continues the conversation shows the name the title showed before the move, not the name Claude Code gives the background session. Every name a title shows is kept in `~/.claude/plugins/data/terminal-title/names/<session id>.json`; a session started as a fork finds the record whose `parkedJobId` is its own `jobId` and takes that session's name, and draws nothing while it looks. Your own `/rename` in the background session changes the name; a generated title or a hook's rename does not. With no such record or name within 5 s (a `/bg` move leaves no record), it shows its first prompt and says why in the transcript.
-- The title is written as an OSC 0 sequence to `/dev/tty`. If that write fails, the plugin stops writing and says why in the transcript instead of failing silently.
+- On macOS and Linux the title is written as an OSC 0 sequence to `/dev/tty`. If that write fails, the plugin stops writing and says why in the transcript instead of failing silently.
+- Windows has no `/dev/tty`: the terminal title is the title of the console Claude Code runs in. The plugin writes the title text, followed by one newline, to `~/.claude/plugins/data/terminal-title/titles/<session id>.txt`, and at the start of a `terminal` session it starts a small helper once, `bin/title-helper-<arch>.exe` (amd64 or arm64, chosen by `PROCESSOR_ARCHITECTURE`). The helper is a Go program built for the GUI subsystem, so it has no console or `conhost` of its own. It holds a handle to its parent, the Claude Code process, and waits on it 40 ms at a time; between waits it reads the file, and when the text changed it attaches to the parent's console, calls `SetConsoleTitleW` and detaches. The very first title is set twice in a row: set once, it does not reach the terminal (measured in WezTerm; the cause is not known). The helper exits when Claude Code does, a killed process included. A failure to write the file, start the helper, or set the title is a transcript line, as on macOS. Measured in WezTerm: about 11 MB working set and 17 MB private bytes per session, and 1.2 s of processor time over a 2.5-minute session with several spinner runs, under 1% of one core.
 
 ## Test
 
@@ -115,15 +116,27 @@ npx tsc -p .
 
 The type declarations under `.claude-plugin/types/` are written by Claude Code when it loads the plugin from this folder; they are not checked in. Load the plugin once (for example, an interactive `claude --plugin-dir .` session) before `npx tsc -p .` on a fresh checkout.
 
+## Building the Windows helper
+
+The helper's binaries are checked in under `bin/`. They are rebuilt from `helper/` with one command, from the repository root, on any OS with Go installed:
+
+```sh
+(cd helper && for arch in amd64 arm64; do GOTOOLCHAIN=go1.26.4 CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "-H=windowsgui -s -w -buildid=" -o ../bin/title-helper-$arch.exe . || exit 1; done)
+```
+
+`GOTOOLCHAIN` pins the Go release, and `-trimpath`, `-buildvcs=false` and the empty build id keep paths, the commit and the build id out of the binary, so the same source gives the same bytes. `-H=windowsgui` builds a GUI-subsystem program, which never gets a console. The helper uses only the standard library.
+
 ## Limitations
 
 - The marker stays from a permission request until the permissioned tool returns. Claude Code reports the request and the tool's end but not the answer in between, so a long approved tool keeps the marker while it runs.
 - A background task that was already running when the plugin loaded is not known; it is picked up when its next notification arrives.
 - The move to a background session is read from Claude Code's own session records, which are not a documented interface; a change to their format stops the detection, and the spinner then keeps running after a move as it did before.
 - Opening a background session in the tab and leaving it, Claude Code itself writes the background session's own name to the terminal title. The plugin gets no event for either, so that name stays until the background session's title next changes.
-- The kept names are small files that are not removed: `$.fs` has no delete.
+- The kept names, and on Windows the title files, are small files that are not removed: `$.fs` has no delete.
 - The title is written only when the session started on the `terminal` surface. A `-p` run, the SDK and the desktop app have no terminal title to write.
-- `/dev/tty` is the verified transport on macOS. Windows has no such terminal path, so the plugin refuses there with a transcript line instead of writing a file; another transport is not implemented.
+- `/dev/tty` is the verified transport on macOS. On Windows the title goes through the helper above, verified in WezTerm only; other Windows terminals that show the console title should work the same way but were not tried. A Windows processor other than x64 or ARM64 has no helper: the plugin says so in the transcript and writes no title.
+- On Windows the title follows the file up to 40 ms late.
+- The title file is named after the session the process started with, and the helper reads that one file for the life of the process, a `/clear` included.
 - The name and the title are computed from events. A session resumed with a transcript over 4 MiB has no generated title to read, as described above.
 - `$.session.messages()` returns the newest 4096 messages. In a long resumed session with no readable title, the first prompt used as the name can be a later user message.
 

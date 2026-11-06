@@ -22,9 +22,20 @@ import {
   parseShownName,
   sessionRecordsDir,
   shownNamesDir,
+  titlesDir,
 } from './session-record'
 
 const TTY = '/dev/tty'
+// Windows has no /dev/tty. The title goes to a file, and a helper started once
+// per session sets it as its parent's console title; see helper/main.go.
+const HELPER_ARCH: Readonly<Record<string, string>> = {
+  AMD64: 'amd64',
+  ARM64: 'arm64',
+}
+
+// Where the title is written: the terminal's own tty, or the file the
+// Windows title helper reads.
+type Transport = { kind: 'tty' } | { kind: 'file'; path: string; helper: string }
 const TITLE_POLL_MS = 1000
 // The title generator answers within a few seconds of the first prompt. The
 // poll is a safety net, not a permanent read of the transcript.
@@ -136,7 +147,9 @@ function createController(
   let generation = 0
   let hasSurface = false
   let envChecked = false
-  let platformChecked = false
+  let transport: Promise<Transport | undefined> | undefined
+  let target: Transport | undefined
+  let helperStarted = false
   let transcriptPath: string | undefined
   let name = ''
   let nameKind: NameKind = 'none'
@@ -190,7 +203,8 @@ function createController(
   if (stripError !== undefined) report(stripError)
 
   const writeTitle = (title: string, silent = false): void => {
-    if (!hasSurface || parked) return
+    const to = target
+    if (!hasSurface || parked || to === undefined) return
     if (writeFailed && !silent) return
     pending = title
     if (writing) return
@@ -200,12 +214,14 @@ function createController(
         while (pending !== undefined) {
           const text = pending
           pending = undefined
-          await $.fs.write(TTY, `\x1b]0;${text}\x07`)
+          if (to.kind === 'tty') await $.fs.write(TTY, `\x1b]0;${text}\x07`)
+          else await $.fs.write(to.path, `${text}\n`)
         }
       } catch (error) {
         if (!silent) {
           writeFailed = true
-          report(`cannot write the terminal title to ${TTY}: ${reasonOf(error)}`)
+          const where = to.kind === 'tty' ? TTY : to.path
+          report(`cannot write the terminal title to ${where}: ${reasonOf(error)}`)
         }
       } finally {
         writing = false
@@ -669,21 +685,65 @@ function createController(
     }
   }
 
-  const checkPlatform = async (): Promise<boolean> => {
-    if (platformChecked) return true
-    platformChecked = true
+  // The title file is named after the session the process starts with and
+  // stays the helper's for the process's life, a /clear included.
+  const resolveTransport = async (): Promise<Transport | undefined> => {
     let os: string | undefined
     try {
       os = await $.env.get('OS')
     } catch (error) {
       report(`cannot read OS: ${reasonOf(error)}`)
-      return true
+      return { kind: 'tty' }
     }
-    if (os === 'Windows_NT') {
-      report('the terminal title transport /dev/tty is not available on Windows')
-      return false
+    if (os !== 'Windows_NT') return { kind: 'tty' }
+    try {
+      const arch = await $.env.get('PROCESSOR_ARCHITECTURE')
+      const helperArch = arch === undefined ? undefined : HELPER_ARCH[arch]
+      if (helperArch === undefined) {
+        report(`the terminal title has no Windows helper for processor architecture ${arch ?? '(unset)'}`)
+        return undefined
+      }
+      const config = await resolveConfigDir()
+      if (config === undefined) return undefined
+      const sessionId = await $.session.id()
+      return {
+        kind: 'file',
+        path: `${titlesDir(config)}/${sessionId}.txt`,
+        helper: `${$.plugin.root}/bin/title-helper-${helperArch}.exe`,
+      }
+    } catch (error) {
+      report(`cannot prepare the Windows terminal title: ${reasonOf(error)}`)
+      return undefined
     }
-    return true
+  }
+
+  // The helper lives as long as the session's process; it exits on its own
+  // when the process does, and its loop here ends with it. Whatever it says
+  // is an error, and its end while the session runs leaves the title as it
+  // stands.
+  const startHelper = (to: Transport): void => {
+    if (to.kind !== 'file' || helperStarted) return
+    helperStarted = true
+    void (async () => {
+      try {
+        const child = $.process.spawn({ argv: [to.helper, to.path] })
+        for (;;) {
+          const step = await child.next()
+          if (step.done) {
+            const { code, signal } = step.value
+            report(
+              `the terminal title helper exited (${signal ?? `code ${code}`}); ` +
+                'the title no longer changes',
+            )
+            return
+          }
+          const text = step.value.text.trim()
+          if (text !== '') report(`the terminal title helper: ${text}`)
+        }
+      } catch (error) {
+        report(`cannot run the terminal title helper ${to.helper}: ${reasonOf(error)}`)
+      }
+    })()
   }
 
   const checkNativeTitle = async (): Promise<void> => {
@@ -752,18 +812,22 @@ function createController(
 
   const sessionStart = async (e: { surface: string | null }): Promise<void> => {
     const current = generation
-    hasSurface = e.surface === 'terminal'
-    if (!hasSurface) {
-      stopSpinner()
-      stopPoll()
-      return
-    }
-    if (!(await checkPlatform())) {
+    if (e.surface !== 'terminal') {
       hasSurface = false
       stopSpinner()
       stopPoll()
       return
     }
+    transport ??= resolveTransport()
+    target = await transport
+    hasSurface = target !== undefined
+    if (target === undefined) {
+      stopSpinner()
+      stopPoll()
+      return
+    }
+    // A paint while the transport was being chosen wrote nothing.
+    painted = ''
     if (current !== generation) return
     await checkNativeTitle()
     if (current !== generation) return
@@ -774,6 +838,9 @@ function createController(
     await readSessionMessages()
     if (current !== generation) return
     paint()
+    // After the first paint, so the helper's first read finds this session's
+    // title and not one a past run of it left in the file.
+    startHelper(target)
   }
 
   return {

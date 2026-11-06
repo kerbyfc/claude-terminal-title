@@ -35,14 +35,23 @@ type Harness = {
   setResult: (result: unknown) => void
   setEnv: (value: string | undefined) => void
   setOs: (value: string | undefined) => void
+  setArch: (value: string | undefined) => void
   setWriteGate: (gate: Promise<void> | undefined) => void
   setFile: (path: string, text: string | undefined) => void
   reads: string[]
   files: Map<string, string>
+  spawns: string[][]
+  // What the spawned title helper does; by default it runs until exitHelper.
+  helper: (argv: string[]) => AsyncGenerator<unknown, unknown>
+  exitHelper: () => void
+  titleFile: () => string | undefined
   atPermission?: string
   atToolCall?: string
   denyWrite: boolean
 }
+
+// On Windows the test kit hands paths on with the host's separators.
+const TITLE_FILE = /[\\/]plugins[\\/]data[\\/]terminal-title[\\/]titles[\\/]ses\.txt$/
 
 function harness(on: any): Harness {
   let transcript = ''
@@ -52,9 +61,15 @@ function harness(on: any): Harness {
   let result: unknown = {}
   let env: string | undefined = '1'
   let os: string | undefined
+  let arch: string | undefined = 'AMD64'
   let writeGate: Promise<void> | undefined
   const files = new Map<string, string>()
   const reads: string[] = []
+  const spawns: string[][] = []
+  let exitHelper = (): void => {}
+  const helperExit = new Promise<void>(resolve => {
+    exitHelper = resolve
+  })
 
   const writes: string[] = []
   const logs: string[] = []
@@ -85,6 +100,9 @@ function harness(on: any): Harness {
     setOs: value => {
       os = value
     },
+    setArch: value => {
+      arch = value
+    },
     setWriteGate: gate => {
       writeGate = gate
     },
@@ -94,8 +112,20 @@ function harness(on: any): Harness {
     },
     reads,
     files,
+    spawns,
+    helper: async function* () {
+      await helperExit
+      return { value: { code: 0, signal: null } }
+    },
+    exitHelper: () => exitHelper(),
+    titleFile: () => [...files].find(([path]) => TITLE_FILE.test(path))?.[1],
     denyWrite: false,
   }
+
+  on('process.spawn', async function* (_: any, e: any) {
+    spawns.push([...e.argv])
+    return yield* state.helper([...e.argv])
+  })
 
   on('fs.write', async (_: any, e: any) => {
     if (e.path === '/dev/tty') state.attempts += 1
@@ -141,7 +171,9 @@ function harness(on: any): Harness {
         ? env
         : e.name === 'OS'
           ? os
-          : e.name === 'HOME'
+          : e.name === 'PROCESSOR_ARCHITECTURE'
+            ? arch
+            : e.name === 'HOME'
             ? HOME
             : undefined,
   }))
@@ -1050,15 +1082,111 @@ test('a stuck title write does not hold the permission dialog', async ($, on) =>
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
 
-test('a Windows session refuses the /dev/tty transport', async ($, on) => {
+test('a Windows session writes the title to a file its helper shows', async ($, on) => {
   const clock = mock.clock(on)
   const h = harness(on)
   h.setOs('Windows_NT')
-  h.setTranscript('{"type":"ai-title","aiTitle":"Demo"}')
   await start($, h, clock)
 
+  expect(h.spawns.length).toBe(1)
+  const [exe, file] = h.spawns[0] ?? []
+  expect(/[\\/]bin[\\/]title-helper-amd64\.exe$/.test(exe ?? '')).toBe(true)
+  expect(TITLE_FILE.test(file ?? '')).toBe(true)
+
+  await $.turn.start({ text: 'Fix auth', turnId: 't1' })
+  await clock.settle()
+  expect(h.titleFile()).toBe('◐ Fix auth\n')
+  await clock.advance(150)
+  expect(h.titleFile()).toBe('◓ Fix auth\n')
+
+  await $.turn.complete({
+    answer: 'needs input: [question](obsidian://x)',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+  })
+  await clock.settle()
+  expect(h.titleFile()).toBe('◍ Fix auth\n')
   expect(h.attempts).toBe(0)
-  expect(h.logs.some(line => line.includes('not available on Windows'))).toBe(true)
+  expect(h.writes.length).toBe(0)
+
+  await $.session.start({ cwd: '/tmp/terminal-title', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(h.spawns.length).toBe(1)
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+  await clock.settle()
+  expect(h.titleFile()).toBe('\n')
+  expect(h.logs.some(line => line.includes('helper'))).toBe(false)
+
+  h.exitHelper()
+  await clock.settle()
+})
+
+test('an ARM64 Windows session starts the arm64 helper', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setOs('Windows_NT')
+  h.setArch('ARM64')
+  await start($, h, clock)
+
+  expect(/[\\/]bin[\\/]title-helper-arm64\.exe$/.test(h.spawns[0]?.[0] ?? '')).toBe(true)
+
+  h.exitHelper()
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+  await clock.settle()
+})
+
+test('what the Windows helper says and its exit are reported', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setOs('Windows_NT')
+  h.helper = async function* () {
+    yield { stream: 'stderr', text: 'cannot attach to the console of process 7: denied\n' }
+    return { value: { code: 1, signal: null } }
+  }
+  await start($, h, clock)
+
+  expect(
+    h.logs.some(line =>
+      line.includes('the terminal title helper: cannot attach to the console of process 7: denied'),
+    ),
+  ).toBe(true)
+  expect(h.logs.some(line => line.includes('the terminal title helper exited (code 1)'))).toBe(true)
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a Windows helper that cannot start is reported', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setOs('Windows_NT')
+  h.helper = async function* () {
+    throw new Error('ENOENT: no such file')
+  }
+  await start($, h, clock)
+
+  expect(h.logs.some(line => line.includes('cannot run the terminal title helper'))).toBe(true)
+
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
+test('a Windows processor without a helper is reported and writes no title', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setOs('Windows_NT')
+  h.setArch('x86')
+  await start($, h, clock)
+
+  await $.turn.start({ text: 'Fix auth', turnId: 't1' })
+  await clock.settle()
+  expect(h.spawns.length).toBe(0)
+  expect(h.titleFile()).toBeUndefined()
+  expect(h.attempts).toBe(0)
+  expect(h.logs.some(line => line.includes('no Windows helper for processor architecture x86'))).toBe(
+    true,
+  )
 
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })

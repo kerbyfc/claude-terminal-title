@@ -18,6 +18,15 @@ const OSC = /\x1b\]0;([^\x07]*)\x07/
 const HOME = '/home/test'
 const RECORDS = `${HOME}/.claude/sessions`
 
+// The engine hands an `fs.*` hook the path made absolute for the host: on
+// Windows the plugin's `/dev/tty` arrives as `C:\dev\tty`. The stand spells
+// paths in POSIX form, so a drive path is read back into that form; a POSIX
+// path, all the engine hands a hook on macOS and Linux, is kept as given.
+function standPath(path: string): string {
+  if (!/^[A-Za-z]:\\/.test(path) || path.includes('/')) return path
+  return path.slice(2).replaceAll('\\', '/')
+}
+
 function record(fields: Record<string, unknown>): string {
   return JSON.stringify({ pid: 1, cwd: '/tmp/terminal-title', kind: 'interactive', ...fields })
 }
@@ -128,10 +137,11 @@ function harness(on: any): Harness {
   })
 
   on('fs.write', async (_: any, e: any) => {
-    if (e.path === '/dev/tty') state.attempts += 1
+    const path = standPath(e.path)
+    if (path === '/dev/tty') state.attempts += 1
     if (writeGate !== undefined) await writeGate
-    if (e.path !== '/dev/tty') {
-      files.set(e.path, e.text)
+    if (path !== '/dev/tty') {
+      files.set(path, e.text)
       return { value: undefined }
     }
     if (state.denyWrite) return { deny: 'no tty in the test' }
@@ -139,11 +149,12 @@ function harness(on: any): Harness {
     return { value: undefined }
   })
   on('fs.read', (_: any, e: any) => {
-    reads.push(e.path)
-    const file = files.get(e.path)
+    const path = standPath(e.path)
+    reads.push(path)
+    const file = files.get(path)
     if (file !== undefined) return { value: file }
-    if (e.path.startsWith(`${HOME}/`)) return { deny: 'ENOENT' }
-    if (e.path.endsWith('custom-title.json')) {
+    if (path.startsWith(`${HOME}/`)) return { deny: 'ENOENT' }
+    if (path.endsWith('custom-title.json')) {
       return custom === undefined ? { deny: 'ENOENT' } : { value: custom }
     }
     return { value: transcript }
@@ -157,8 +168,9 @@ function harness(on: any): Harness {
     },
   }))
   on('fs.list', (_: any, e: any) => {
-    reads.push(`list ${e.path}`)
-    const prefix = `${e.path}/`
+    const dir = standPath(e.path)
+    reads.push(`list ${dir}`)
+    const prefix = `${dir}/`
     return {
       value: [...files.keys()]
         .filter(path => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))

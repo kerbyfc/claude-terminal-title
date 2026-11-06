@@ -475,6 +475,59 @@ test('a permission request marks the tool call as waiting', async ($, on) => {
   await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
 })
 
+test('an AskUserQuestion that also asks permission leaves no marker once answered', async ($, on) => {
+  const clock = mock.clock(on)
+  const h = harness(on)
+  h.setOs('Windows_NT')
+  h.setTranscript('{"type":"ai-title","aiTitle":"Fix auth"}')
+  await start($, h, clock)
+
+  await $.turn.start({ text: 'Ask a question', turnId: 'main' })
+  await clock.settle()
+  expect(h.titleFile()).toBe('◐ Fix auth\n')
+
+  let release!: () => void
+  h.setGate(new Promise<void>(resolve => {
+    release = resolve
+  }))
+  const call = $.tool.call({
+    tool: 'AskUserQuestion',
+    questions: [
+      {
+        question: 'Which colour?',
+        header: 'Colour',
+        options: [
+          { label: 'Red', description: 'Red' },
+          { label: 'Blue', description: 'Blue' },
+        ],
+        multiSelect: false,
+      },
+    ],
+  })
+  await clock.settle()
+  await $.classic.PermissionRequest({ tool_name: 'AskUserQuestion', tool_input: {} })
+  await clock.settle()
+  expect(h.titleFile()).toBe('◍ Fix auth\n')
+
+  release()
+  await call
+  await clock.settle()
+  expect(h.titleFile()).toBe('◐ Fix auth\n')
+
+  await $.turn.complete({
+    answer: 'Red it is.',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'main',
+    reason: 'answer',
+  })
+  await clock.settle()
+  expect(h.titleFile()).toBe('Fix auth\n')
+
+  h.exitHelper()
+  await $.session.end({ reason: 'other', sessionId: 'ses', resume: { id: 'ses' } })
+})
+
 test('an AskUserQuestion dialog marks the session as waiting', async ($, on) => {
   const clock = mock.clock(on)
   const h = harness(on)

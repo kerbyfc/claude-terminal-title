@@ -921,7 +921,10 @@ function createController(
 
     callFinished: (tool, id, result) => {
       activeCalls.delete(id)
-      if (questions.delete(id) || permissions.delete(id)) paint()
+      // AskUserQuestion is a question and asks permission too: both go.
+      const wasQuestion = questions.delete(id)
+      const wasPermission = permissions.delete(id)
+      if (wasQuestion || wasPermission) paint()
       if (tool === 'TaskStop') {
         const stopped = stoppedTaskOf(result)
         if (stopped !== undefined) {
